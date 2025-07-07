@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>RKL League Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body {
+      background: #111;
+      color: #fff;
+      font-family: sans-serif;
+      padding: 20px;
+    }
+    .section {
+      margin-bottom: 24px;
+    }
+    .section h2 {
+      margin-bottom: 10px;
+      font-size: 20px;
+    }
+    ul {
+      list-style: none;
+      padding: 0;
+    }
+    li {
+      margin: 4px 0;
+    }
+    .median {
+      font-weight: bold;
+      margin-bottom: 24px;
+    }
+    #error {
+      display: none;
+      color: #f55;
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+  <h1>RKL League Dashboard</h1>
+  <div id="dashboard"></div>
+  <div id="error">⚠ Failed to load league data.</div>
+
+  <script>
+    function createSection(title, items, type) {
+      const section = document.createElement('div');
+      section.className = 'section';
+      const heading = document.createElement('h2');
+      heading.textContent = title;
+      const list = document.createElement('ul');
+
+      items.forEach(item => {
+        const li = document.createElement('li');
+        li.textContent = type === 'teams'
+          ? `${item.team}: ${item.score}`
+          : `${item.name}: ${item.score}`;
+        list.appendChild(li);
+      });
+
+      section.appendChild(heading);
+      section.appendChild(list);
+      return section;
+    }
+
+    function parseDashboardData(data) {
+      return {
+        topTeams: data.topTeams,
+        bottomTeams: data.bottomTeams,
+        medianScore: data.median,
+        topPlayers: data.topUsers,
+        bottomPlayers: data.bottomUsers
+      };
+    }
+
+    async function loadDashboard() {
+      try {
+        const res = await fetch('/data.json');
+        if (!res.ok) throw new Error('Fetch failed');
+
+        const data = await res.json();
+        const stats = parseDashboardData(data.stats);
+
+        const dash = document.getElementById('dashboard');
+        dash.appendChild(createSection("Top Teams", stats.topTeams, "teams"));
+        dash.appendChild(createSection("Bottom Teams", stats.bottomTeams, "teams"));
+
+        const median = document.createElement('div');
+        median.className = 'median';
+        median.textContent = `League Median Team Score: ${stats.medianScore}`;
+        dash.appendChild(median);
+
+        dash.appendChild(createSection("Top Players", stats.topPlayers, "players"));
+        dash.appendChild(createSection("Bottom Players", stats.bottomPlayers, "players"));
+
+      } catch (err) {
+        document.getElementById('error').style.display = 'block';
+      }
+    }
+
+    loadDashboard();
+  </script>
+</body>
+</html>
