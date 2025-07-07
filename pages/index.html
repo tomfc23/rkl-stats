@@ -1,1 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>RKL League Stats</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      background-color: #1a1a1a;
+      color: #ffffff;
+      padding: 24px;
+    }
+
+    h1 {
+      text-align: center;
+      margin-bottom: 32px;
+      font-size: 28px;
+    }
+
+    .section {
+      background-color: #2a2a2a;
+      border-radius: 12px;
+      margin-bottom: 24px;
+      padding: 20px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+    }
+
+    .section h2 {
+      font-size: 20px;
+      margin-bottom: 12px;
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .section h2 span {
+      font-size: 14px;
+      color: #888;
+    }
+
+    .list-item {
+      padding: 8px 0;
+      border-bottom: 1px solid #444;
+      font-size: 16px;
+      display: flex;
+      justify-content: space-between;
+    }
+
+    .list-item:last-child {
+      border-bottom: none;
+    }
+
+    .collapsed .list-item:nth-child(n+2) {
+      display: none;
+    }
+
+    .highlight {
+      color: #4a90e2;
+      font-weight: 600;
+    }
+
+    .negative {
+      color: #e74c3c;
+    }
+
+    .positive {
+      color: #27ae60;
+    }
+
+    .median {
+      text-align: center;
+      font-size: 18px;
+      margin-top: -8px;
+      color: #ccc;
+    }
+
+    .error {
+      text-align: center;
+      font-size: 16px;
+      color: #e74c3c;
+      margin-top: 40px;
+    }
+
+    @media (max-width: 600px) {
+      .list-item {
+        font-size: 14px;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 4px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <h1>RKL League Stats</h1>
+  <div id="dashboard"></div>
+  <div id="error" class="error" style="display:none;">Failed to load league stats.</div>
+
+  <script>
+    function parseBaseKarma(line) {
+      const match = line.match(/: *(-?\d+)/);
+      return match ? parseInt(match[1]) : null;
+    }
+
+    function parseDashboardData(games) {
+      const teamScores = [];
+      const playerScores = [];
+
+      for (const game of games) {
+        // Extract base scores from players
+        const roster1Base = game.roster1.map(parseBaseKarma).filter(n => n !== null);
+        const roster2Base = game.roster2.map(parseBaseKarma).filter(n => n !== null);
+
+        const total1 = roster1Base.reduce((a, b) => a + b, 0);
+        const total2 = roster2Base.reduce((a, b) => a + b, 0);
+
+        teamScores.push({ name: game.team1, score: total1 });
+        teamScores.push({ name: game.team2, score: total2 });
+
+        // Add each player line with base score
+        game.roster1.forEach(line => {
+          const base = parseBaseKarma(line);
+          if (base !== null) playerScores.push({ user: line.split(':')[0], score: base });
+        });
+        game.roster2.forEach(line => {
+          const base = parseBaseKarma(line);
+          if (base !== null) playerScores.push({ user: line.split(':')[0], score: base });
+        });
+      }
+
+      // Sort
+      const topTeams = [...teamScores].sort((a, b) => b.score - a.score).slice(0, 3);
+      const bottomTeams = [...teamScores].sort((a, b) => a.score - b.score).slice(0, 3);
+      const medianScore = computeMedian(teamScores.map(t => t.score));
+
+      const topPlayers = [...playerScores].sort((a, b) => b.score - a.score).slice(0, 5);
+      const bottomPlayers = [...playerScores].sort((a, b) => a.score - b.score).slice(0, 5);
+
+      return { topTeams, bottomTeams, medianScore, topPlayers, bottomPlayers };
+    }
+
+    function computeMedian(numbers) {
+      if (!numbers.length) return 0;
+      const sorted = [...numbers].sort((a, b) => a - b);
+      const mid = Math.floor(sorted.length / 2);
+      return sorted.length % 2
+        ? sorted[mid]
+        : Math.round((sorted[mid - 1] + sorted[mid]) / 2);
+    }
+
+    function createSection(title, items, type) {
+      const div = document.createElement('div');
+      div.className = 'section collapsed';
+
+      const header = document.createElement('h2');
+      header.innerHTML = `${title} <span>Click to expand</span>`;
+      header.onclick = () => {
+        div.classList.toggle('collapsed');
+      };
+      div.appendChild(header);
+
+      items.forEach(item => {
+        const row = document.createElement('div');
+        row.className = 'list-item';
+        row.innerHTML = `
+          <div>${item.name || item.user}</div>
+          <div class="${item.score > 0 ? 'positive' : item.score < 0 ? 'negative' : ''}">
+            ${item.score}
+          </div>
+        `;
+        div.appendChild(row);
+      });
+
+      return div;
+    }
+
+    async function loadDashboard() {
+      try {
+        const res = await fetch('/data.json');
+        if (!res.ok) throw new Error('Fetch failed');
+
+        const data = await res.json();
+        const stats = parseDashboardData(data.games);
+
+        const dash = document.getElementById('dashboard');
+        dash.appendChild(createSection("Top Teams", stats.topTeams, "teams"));
+        dash.appendChild(createSection("Bottom Teams", stats.bottomTeams, "teams"));
+
+        const median = document.createElement('div');
+        median.className = 'median';
+        median.textContent = `League Median Team Score: ${stats.medianScore}`;
+        dash.appendChild(median);
+
+        dash.appendChild(createSection("Top Players", stats.topPlayers, "players"));
+        dash.appendChild(createSection("Bottom Players", stats.bottomPlayers, "players"));
+
+      } catch (err) {
+        document.getElementById('error').style.display = 'block';
+      }
+    }
+
+    loadDashboard();
+  </script>
+</body>
+</html>
 
