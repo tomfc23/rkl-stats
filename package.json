@@ -1,1 +1,8 @@
+{
+  "name": "rkl-live-stats",
+  "type": "module",
+  "dependencies": {
+    "node-fetch": "^3.4.1"
+  }
+}
 
