@@ -1,103 +1,127 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <title>RKL League Dashboard</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta charset="UTF-8">
+  <title>Karma Delta Tracker</title>
   <style>
     body {
-      background: #111;
-      color: #fff;
-      font-family: sans-serif;
-      padding: 20px;
+      background: #121212;
+      color: #f1f1f1;
+      font-family: Arial, sans-serif;
+      padding: 1rem;
     }
-    .section {
-      margin-bottom: 24px;
+    h1 {
+      color: #4CAF50;
     }
-    .section h2 {
-      margin-bottom: 10px;
-      font-size: 20px;
+    .loader {
+      margin: 1rem 0;
+      font-size: 1rem;
     }
-    ul {
-      list-style: none;
-      padding: 0;
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 1rem;
     }
-    li {
-      margin: 4px 0;
+    th, td {
+      border: 1px solid #333;
+      padding: 0.5rem;
+      text-align: left;
     }
-    .median {
-      font-weight: bold;
-      margin-bottom: 24px;
+    th {
+      background: #1e1e1e;
     }
-    #error {
-      display: none;
-      color: #f55;
-      font-weight: bold;
+    tr:nth-child(even) {
+      background: #1a1a1a;
+    }
+    .success {
+      color: #4CAF50;
+    }
+    .fail {
+      color: #f44336;
     }
   </style>
 </head>
 <body>
-  <h1>RKL League Dashboard</h1>
-  <div id="dashboard"></div>
-  <div id="error">⚠ Failed to load league data.</div>
+  <h1>Karma Delta Tracker</h1>
+  <div class="loader" id="loader">Loading... Success: 0 | Fail: 0</div>
+  <table id="karmaTable">
+    <thead>
+      <tr>
+        <th>Username</th>
+        <th>User ID</th>
+        <th>Karma Delta</th>
+        <th>Status</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
 
   <script>
-    function createSection(title, items, type) {
-      const section = document.createElement('div');
-      section.className = 'section';
-      const heading = document.createElement('h2');
-      heading.textContent = title;
-      const list = document.createElement('ul');
+    const csvUrl = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRe5WoA--wsfCCCvtL8QgQKsJv0z1AIUTY7k5NEYgUF-Ipu3Iotxkcbw7D-Cme6YGUksHy3DmyDYpaO/pub?output=csv';
+    const tableBody = document.querySelector('#karmaTable tbody');
+    const loader = document.getElementById('loader');
 
-      items.forEach(item => {
-        const li = document.createElement('li');
-        li.textContent = type === 'teams'
-          ? `${item.team}: ${item.score}`
-          : `${item.name}: ${item.score}`;
-        list.appendChild(li);
+    let successCount = 0;
+    let failCount = 0;
+
+    async function fetchCSVAndProcess() {
+      const res = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(csvUrl)}`);
+      const text = await res.text();
+      const lines = text.trim().split('\n');
+      const headers = lines.shift().split(',');
+
+      const userIndex = headers.indexOf('User @');
+      const idIndex = headers.indexOf('User ID');
+
+      const users = lines.map(line => {
+        const cols = line.split(',');
+        return {
+          username: cols[userIndex],
+          userId: cols[idIndex]
+        };
       });
 
-      section.appendChild(heading);
-      section.appendChild(list);
-      return section;
-    }
-
-    function parseDashboardData(data) {
-      return {
-        topTeams: data.topTeams,
-        bottomTeams: data.bottomTeams,
-        medianScore: data.median,
-        topPlayers: data.topUsers,
-        bottomPlayers: data.bottomUsers
-      };
-    }
-
-    async function loadDashboard() {
-      try {
-        const res = await fetch('/data.json');
-        if (!res.ok) throw new Error('Fetch failed');
-
-        const data = await res.json();
-        const stats = parseDashboardData(data.stats);
-
-        const dash = document.getElementById('dashboard');
-        dash.appendChild(createSection("Top Teams", stats.topTeams, "teams"));
-        dash.appendChild(createSection("Bottom Teams", stats.bottomTeams, "teams"));
-
-        const median = document.createElement('div');
-        median.className = 'median';
-        median.textContent = `League Median Team Score: ${stats.medianScore}`;
-        dash.appendChild(median);
-
-        dash.appendChild(createSection("Top Players", stats.topPlayers, "players"));
-        dash.appendChild(createSection("Bottom Players", stats.bottomPlayers, "players"));
-
-      } catch (err) {
-        document.getElementById('error').style.display = 'block';
+      // Process in chunks of 5
+      for (let i = 0; i < users.length; i += 5) {
+        const batch = users.slice(i, i + 5);
+        await Promise.all(batch.map(u => fetchKarma(u)));
+        await new Promise(res => setTimeout(res, 350)); // 350ms delay between batches
       }
     }
 
-    loadDashboard();
+    async function fetchKarma({ username, userId }) {
+      const url = `https://api.real.vg/user/${userId}/karmafeed`;
+      try {
+        const res = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`);
+        const data = await res.json();
+        const karmaDelta = data.stats?.karmaDelta ?? 'N/A';
+
+        successCount++;
+        updateLoader();
+        addRow(username, userId, karmaDelta, '✅', 'success');
+      } catch (e) {
+        failCount++;
+        updateLoader();
+        addRow(username, userId, 'Error', '❌', 'fail');
+      }
+    }
+
+    function updateLoader() {
+      loader.textContent = `Loading... Success: ${successCount} | Fail: ${failCount}`;
+    }
+
+    function addRow(username, userId, karmaDelta, status, statusClass) {
+      const row = document.createElement('tr');
+      row.innerHTML = `
+        <td>${username}</td>
+        <td>${userId}</td>
+        <td>${karmaDelta}</td>
+        <td class="${statusClass}">${status}</td>
+      `;
+      tableBody.appendChild(row);
+    }
+
+    fetchCSVAndProcess();
   </script>
 </body>
 </html>
