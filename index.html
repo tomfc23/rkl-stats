@@ -67,42 +67,55 @@
     async function fetchCSVAndProcess() {
       const res = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(csvUrl)}`);
       const text = await res.text();
-      const lines = text.trim().split('\n');
-      const headers = lines.shift().split(',');
 
-      const userIndex = headers.indexOf('User @');
-      const idIndex = headers.indexOf('User ID');
+      // Use proper CSV parser (regex-free way)
+      const rows = text.trim().split('\n').map(r => r.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/g));
+      const headers = rows.shift();
 
-      const users = lines.map(line => {
-        const cols = line.split(',');
-        return {
-          username: cols[userIndex],
-          userId: cols[idIndex]
-        };
-      });
+      const usernameIndex = headers.findIndex(h => h.includes('User @'));
+      const userIdIndex = headers.findIndex(h => h.includes('User ID'));
 
-      // Process in chunks of 5
+      const users = rows.map(cols => ({
+        username: cols[usernameIndex]?.replace(/"/g, ''),
+        userId: cols[userIdIndex]?.replace(/"/g, '')
+      }));
+
       for (let i = 0; i < users.length; i += 5) {
         const batch = users.slice(i, i + 5);
-        await Promise.all(batch.map(u => fetchKarma(u)));
-        await new Promise(res => setTimeout(res, 350)); // 350ms delay between batches
+        await Promise.all(batch.map(u => fetchKarmaWithRetry(u)));
+        await new Promise(res => setTimeout(res, 800)); // increased delay
       }
     }
 
-    async function fetchKarma({ username, userId }) {
-      const url = `https://api.real.vg/user/${userId}/karmafeed`;
-      try {
-        const res = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`);
-        const data = await res.json();
-        const karmaDelta = data.stats?.karmaDelta ?? 'N/A';
+    async function fetchKarmaWithRetry(user, tries = 0) {
+      const maxRetries = 2;
+      const proxies = [
+        'https://api.allorigins.win/raw?url=',
+        'https://api.allorigins.hex.pm/raw?url='
+      ];
 
-        successCount++;
-        updateLoader();
-        addRow(username, userId, karmaDelta, '✅', 'success');
-      } catch (e) {
+      for (let proxy of proxies) {
+        try {
+          const res = await fetch(`${proxy}${encodeURIComponent(`https://api.real.vg/user/${user.userId}/karmafeed`)}`);
+          const data = await res.json();
+          const delta = data.stats?.karmaDelta ?? 'N/A';
+
+          successCount++;
+          updateLoader();
+          addRow(user.username, user.userId, delta, '✅', 'success');
+          return;
+        } catch (err) {
+          continue;
+        }
+      }
+
+      // Final retry fallback
+      if (tries < maxRetries) {
+        return fetchKarmaWithRetry(user, tries + 1);
+      } else {
         failCount++;
         updateLoader();
-        addRow(username, userId, 'Error', '❌', 'fail');
+        addRow(user.username, user.userId, 'Error', '❌', 'fail');
       }
     }
 
