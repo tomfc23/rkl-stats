@@ -42,7 +42,7 @@
   </style>
 </head>
 <body>
-  <h1>Karma Delta Tracker (Active Players Only)</h1>
+  <h1>Karma Delta Tracker (Today’s Active Players) 2.0</h1>
   <div class="loader" id="loader">Loading... Success: 0 | Fail: 0</div>
   <table id="karmaTable">
     <thead>
@@ -59,6 +59,7 @@
   <script>
     const rostersUrl = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRe5WoA--wsfCCCvtL8QgQKsJv0z1AIUTY7k5NEYgUF-Ipu3Iotxkcbw7D-Cme6YGUksHy3DmyDYpaO/pub?output=csv';
     const scheduleUrl = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRgy7uZ8caLI4hTPKSjl9e7ztFaM9vdBk4vXDQbPtcybqzXGOm3FMpSJiyrRTzIM3K70z_6XbgBGP_0/pub?output=csv';
+
     const tableBody = document.querySelector('#karmaTable tbody');
     const loader = document.getElementById('loader');
 
@@ -69,7 +70,7 @@
       const res = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`);
       const text = await res.text();
       return text.trim().split('\n').map(row =>
-        row.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/g).map(col => col.replace(/^"|"$/g, ''))
+        row.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/g).map(col => col.replace(/^"|"$/g, '').trim())
       );
     }
 
@@ -92,12 +93,13 @@
       const team2Index = scheduleHeaders.findIndex(h => h.toLowerCase().includes('team 2'));
 
       const today = new Date();
-      const todayStr = `${today.getMonth() + 1}/${today.getDate()}`; // "7/8"
+      const todayStr = `${today.getMonth() + 1}/${today.getDate()}`;
 
       const teamsPlayingToday = new Set(
         schedule
           .filter(row => row[dateIndex] === todayStr)
-          .flatMap(row => [row[team1Index], row[team2Index].trim()])
+          .flatMap(row => [row[team1Index], row[team2Index]])
+          .map(t => t.trim())
       );
 
       const activeUsers = rosters.filter(row =>
@@ -108,15 +110,16 @@
         userId: row[idIndex]
       }));
 
-      for (let i = 0; i < activeUsers.length; i += 5) {
-        const batch = activeUsers.slice(i, i + 5);
-        await Promise.all(batch.map(u => fetchKarmaWithRetry(u)));
-        await new Promise(res => setTimeout(res, 800)); // Delay
+      for (let i = 0; i < activeUsers.length; i++) {
+        await fetchKarmaWithRetry(activeUsers[i], 0);
+        const delay = 800 + Math.random() * 700;
+        await new Promise(res => setTimeout(res, delay));
       }
     }
 
     async function fetchKarmaWithRetry(user, tries = 0) {
-      const maxRetries = 2;
+      const maxRetries = 4;
+      const delayBackoff = [0, 1000, 2000, 4000, 8000];
       const proxies = [
         'https://api.allorigins.win/raw?url=',
         'https://api.allorigins.hex.pm/raw?url='
@@ -133,11 +136,13 @@
           addRow(user.username, user.userId, delta, '✅', 'success');
           return;
         } catch (err) {
-          continue;
+          // Try next proxy
         }
       }
 
       if (tries < maxRetries) {
+        const wait = delayBackoff[tries] || 10000;
+        await new Promise(res => setTimeout(res, wait));
         return fetchKarmaWithRetry(user, tries + 1);
       } else {
         failCount++;
