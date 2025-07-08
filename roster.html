@@ -12,7 +12,7 @@
   </style>
 </head>
 <body>
-  <h2>Roster Input</h2>
+  <h2>Roster Input 1.0</h2>
   <textarea id="inputText" placeholder="Paste roster block here..."></textarea>
   <br><br>
   <input type="file" id="csvUpload" />
@@ -20,71 +20,72 @@
   <div id="output"></div>
 
   <script>
-    let idMap = {};
+  let idMap = {};
 
-    // Parse CSV to map @username → ID
-    document.getElementById('csvUpload').addEventListener('change', function(e) {
-      const reader = new FileReader();
-      reader.onload = function(e) {
-        const lines = e.target.result.split(/\r?\n/);
-        const headers = lines[0].split(',');
-        const usernameIndex = headers.findIndex(h => h.toLowerCase().includes('username'));
-        const idIndex = headers.findIndex(h => h.toLowerCase().includes('id'));
+  // Parse CSV to map @username → ID
+  document.getElementById('csvUpload').addEventListener('change', function (e) {
+    const reader = new FileReader();
+    reader.onload = function (e) {
+      const lines = e.target.result.split(/\r?\n/);
+      const headers = lines[0].split(',');
+      const usernameIndex = headers.findIndex(h => h.trim().toLowerCase() === 'user @');
+      const idIndex = headers.findIndex(h => h.trim().toLowerCase() === 'user id');
 
-        for (let i = 1; i < lines.length; i++) {
-          const parts = lines[i].split(',');
-          if (parts.length < Math.max(usernameIndex, idIndex)) continue;
-          const handle = parts[usernameIndex]?.trim().replace(/^@/, '').toLowerCase();
-          const id = parts[idIndex]?.trim();
-          if (handle && id) idMap[handle] = id;
-        }
-      };
-      reader.readAsText(e.target.files[0]);
-    });
+      for (let i = 1; i < lines.length; i++) {
+        const parts = lines[i].split(',');
+        if (parts.length < Math.max(usernameIndex, idIndex)) continue;
+        const handle = parts[usernameIndex]?.trim().toLowerCase();
+        const id = parts[idIndex]?.trim();
+        if (handle && id) idMap[handle] = id;
+      }
+    };
+    reader.readAsText(e.target.files[0]);
+  });
 
-    function processRoster() {
-      const text = document.getElementById('inputText').value;
-      const output = document.getElementById('output');
-      const lines = text.split('\n').map(l => l.trim()).filter(l => l);
-      
-      let currentTeam = '';
-      const players = [];
+  function processRoster() {
+    const text = document.getElementById('inputText').value;
+    const output = document.getElementById('output');
+    const lines = text.split('\n').map(l => l.trim()).filter(l => l);
 
-      for (let line of lines) {
-        if (line.toLowerCase().includes('vs')) continue;
-        if (line.match(/\w+\s*\(\d+-\d+\)/)) {
-          currentTeam = line.split('(')[0].trim();
-          continue;
-        }
+    let currentTeam = '';
+    const players = [];
 
-        const usernameMatch = line.match(/@[\w.\-]+/);
-        if (usernameMatch) {
-          const username = usernameMatch[0].replace('@', '').toLowerCase();
-          const id = idMap[username] || 'NOT FOUND';
-          players.push({
-            user: '@' + username,
-            id,
-            team: currentTeam,
-            playing: 'yes',
-            role: 'player'
-          });
-        }
+    for (let line of lines) {
+      if (line.toLowerCase().includes('vs')) continue;
+      if (line.match(/\w+\s*\(\d+-\d+\)/)) {
+        currentTeam = line.split('(')[0].trim();
+        continue;
       }
 
-      // Generate HTML table
-      let html = '<table><thead><tr><th>Username</th><th>User ID</th><th>Team</th><th>Playing?</th><th>Role</th></tr></thead><tbody>';
-      for (let p of players) {
-        html += `<tr>
-          <td>${p.user}</td>
-          <td>${p.id}</td>
-          <td>${p.team}</td>
-          <td>${p.playing}</td>
-          <td>${p.role}</td>
-        </tr>`;
+      const usernameMatch = line.match(/@[\w.\-]+/);
+      if (usernameMatch) {
+        const username = usernameMatch[0].toLowerCase(); // include @!
+        const id = idMap[username] || 'NOT FOUND';
+        players.push({
+          user: username,
+          id,
+          team: currentTeam,
+          playing: 'yes',
+          role: 'player'
+        });
       }
-      html += '</tbody></table>';
-      output.innerHTML = html;
     }
-  </script>
+
+    // Generate HTML table
+    let html = '<table><thead><tr><th>Username</th><th>User ID</th><th>Team</th><th>Playing?</th><th>Role</th></tr></thead><tbody>';
+    for (let p of players) {
+      html += `<tr>
+        <td>${p.user}</td>
+        <td>${p.id}</td>
+        <td>${p.team}</td>
+        <td>${p.playing}</td>
+        <td>${p.role}</td>
+      </tr>`;
+    }
+    html += '</tbody></table>';
+    output.innerHTML = html;
+  }
+</script>
+
 </body>
 </html>
