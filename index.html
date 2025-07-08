@@ -42,7 +42,7 @@
   </style>
 </head>
 <body>
-  <h1>Karma Delta Tracker updated</h1>
+  <h1>Karma Delta Tracker (Active Players Only)</h1>
   <div class="loader" id="loader">Loading... Success: 0 | Fail: 0</div>
   <table id="karmaTable">
     <thead>
@@ -57,33 +57,61 @@
   </table>
 
   <script>
-    const csvUrl = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRe5WoA--wsfCCCvtL8QgQKsJv0z1AIUTY7k5NEYgUF-Ipu3Iotxkcbw7D-Cme6YGUksHy3DmyDYpaO/pub?output=csv';
+    const rostersUrl = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRe5WoA--wsfCCCvtL8QgQKsJv0z1AIUTY7k5NEYgUF-Ipu3Iotxkcbw7D-Cme6YGUksHy3DmyDYpaO/pub?output=csv';
+    const scheduleUrl = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRgy7uZ8caLI4hTPKSjl9e7ztFaM9vdBk4vXDQbPtcybqzXGOm3FMpSJiyrRTzIM3K70z_6XbgBGP_0/pub?output=csv';
     const tableBody = document.querySelector('#karmaTable tbody');
     const loader = document.getElementById('loader');
 
     let successCount = 0;
     let failCount = 0;
 
-    async function fetchCSVAndProcess() {
-      const res = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(csvUrl)}`);
+    async function fetchCSV(url) {
+      const res = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`);
       const text = await res.text();
+      return text.trim().split('\n').map(row =>
+        row.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/g).map(col => col.replace(/^"|"$/g, ''))
+      );
+    }
 
-      // Use proper CSV parser (regex-free way)
-      const rows = text.trim().split('\n').map(r => r.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/g));
-      const headers = rows.shift();
+    async function fetchData() {
+      const [rosters, schedule] = await Promise.all([
+        fetchCSV(rostersUrl),
+        fetchCSV(scheduleUrl)
+      ]);
 
-      const usernameIndex = headers.findIndex(h => h.includes('User @'));
-      const userIdIndex = headers.findIndex(h => h.includes('User ID'));
+      const rosterHeaders = rosters.shift();
+      const scheduleHeaders = schedule.shift();
 
-      const users = rows.map(cols => ({
-        username: cols[usernameIndex]?.replace(/"/g, ''),
-        userId: cols[userIdIndex]?.replace(/"/g, '')
+      const userIndex = rosterHeaders.findIndex(h => h.includes('User @'));
+      const idIndex = rosterHeaders.findIndex(h => h.includes('User ID'));
+      const teamIndex = rosterHeaders.findIndex(h => h.toLowerCase() === 'team');
+      const playingIndex = rosterHeaders.findIndex(h => h.toLowerCase().includes('playing'));
+
+      const dateIndex = scheduleHeaders.findIndex(h => h.toLowerCase() === 'date');
+      const team1Index = scheduleHeaders.findIndex(h => h.toLowerCase().includes('team 1'));
+      const team2Index = scheduleHeaders.findIndex(h => h.toLowerCase().includes('team 2'));
+
+      const today = new Date();
+      const todayStr = `${today.getMonth() + 1}/${today.getDate()}`; // "7/8"
+
+      const teamsPlayingToday = new Set(
+        schedule
+          .filter(row => row[dateIndex] === todayStr)
+          .flatMap(row => [row[team1Index], row[team2Index].trim()])
+      );
+
+      const activeUsers = rosters.filter(row =>
+        row[playingIndex]?.toLowerCase() === 'yes' &&
+        teamsPlayingToday.has(row[teamIndex])
+      ).map(row => ({
+        username: row[userIndex],
+        userId: row[idIndex]
       }));
 
-      for (let i = 0; i < users.length; i += 5) {
-        const batch = users.slice(i, i + 5);
+      for (let i = 0; i < activeUsers.length; i += 5) {
+        const batch = activeUsers.slice(i, i + 5);
         await Promise.all(batch.map(u => fetchKarmaWithRetry(u)));
-        await new Promise(res => setTimeout(res, 800)); // increased delay
+        await new Promise(res => setTimeout(res, 800)); // Delay
       }
     }
 
@@ -109,7 +137,6 @@
         }
       }
 
-      // Final retry fallback
       if (tries < maxRetries) {
         return fetchKarmaWithRetry(user, tries + 1);
       } else {
@@ -134,7 +161,7 @@
       tableBody.appendChild(row);
     }
 
-    fetchCSVAndProcess();
+    fetchData();
   </script>
 </body>
 </html>
