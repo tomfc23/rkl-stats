@@ -1,172 +1,136 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>Karma Delta Tracker</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>RKL Stat Tracker</title>
+  <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
   <style>
     body {
-      background: #121212;
-      color: #f1f1f1;
-      font-family: Arial, sans-serif;
-      padding: 1rem;
+      font-family: sans-serif;
+      background: #111;
+      color: #fff;
+      padding: 20px;
     }
-    h1 {
-      color: #4CAF50;
+    h2 { margin-bottom: 10px; }
+    .user-row {
+      padding: 6px 12px;
+      border-bottom: 1px solid #333;
     }
-    .loader {
-      margin: 1rem 0;
-      font-size: 1rem;
-    }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      margin-top: 1rem;
-    }
-    th, td {
-      border: 1px solid #333;
-      padding: 0.5rem;
-      text-align: left;
-    }
-    th {
-      background: #1e1e1e;
-    }
-    tr:nth-child(even) {
-      background: #1a1a1a;
-    }
-    .success {
-      color: #4CAF50;
-    }
-    .fail {
-      color: #f44336;
-    }
+    .positive { color: #2ecc71; }
+    .negative { color: #e74c3c; }
+    .neutral { color: #aaa; }
+    .summary { margin-top: 20px; font-weight: bold; }
+    .error { color: #e74c3c; }
   </style>
 </head>
 <body>
-  <h1>Karma Delta Tracker (Today’s Active Players) 2.0</h1>
-  <div class="loader" id="loader">Loading... Success: 0 | Fail: 0</div>
-  <table id="karmaTable">
-    <thead>
-      <tr>
-        <th>Username</th>
-        <th>User ID</th>
-        <th>Karma Delta</th>
-        <th>Status</th>
-      </tr>
-    </thead>
-    <tbody></tbody>
-  </table>
+  <h2>Live Karma Stat Tracker</h2>
+  <div id="user-list">Loading...</div>
+  <div class="summary" id="summary"></div>
 
   <script>
-    const rostersUrl = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRe5WoA--wsfCCCvtL8QgQKsJv0z1AIUTY7k5NEYgUF-Ipu3Iotxkcbw7D-Cme6YGUksHy3DmyDYpaO/pub?output=csv';
-    const scheduleUrl = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRgy7uZ8caLI4hTPKSjl9e7ztFaM9vdBk4vXDQbPtcybqzXGOm3FMpSJiyrRTzIM3K70z_6XbgBGP_0/pub?output=csv';
+    const scheduleCsvUrl = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRgy7uZ8caLI4hTPKSjl9e7ztFaM9vdBk4vXDQbPtcybqzXGOm3FMpSJiyrRTzIM3K70z_6XbgBGP_0/pub?output=csv';
+    const rosterCsvUrl = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRe5WoA--wsfCCCvtL8QgQKsJv0z1AIUTY7k5NEYgUF-Ipu3Iotxkcbw7D-Cme6YGUksHy3DmyDYpaO/pub?output=csv';
+    
+    const outputEl = document.getElementById('user-list');
+    const summaryEl = document.getElementById('summary');
+    const karmaCache = new Map();
 
-    const tableBody = document.querySelector('#karmaTable tbody');
-    const loader = document.getElementById('loader');
-
-    let successCount = 0;
-    let failCount = 0;
-
-    async function fetchCSV(url) {
-      const res = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`);
-      const text = await res.text();
-      return text.trim().split('\n').map(row =>
-        row.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/g).map(col => col.replace(/^"|"$/g, '').trim())
-      );
+    function parseCSV(text) {
+      const lines = text.trim().split('\n');
+      const headers = lines[0].split(',').map(h => h.trim());
+      return lines.slice(1).map(line => {
+        const parts = line.split(',').map(p => p.trim());
+        const obj = {};
+        headers.forEach((h, i) => { obj[h] = parts[i]; });
+        return obj;
+      });
     }
 
-    async function fetchData() {
-      const [rosters, schedule] = await Promise.all([
-        fetchCSV(rostersUrl),
-        fetchCSV(scheduleUrl)
-      ]);
+    function getTodayString() {
+      const now = new Date();
+      const est = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }));
+      if (est.getHours() < 7) est.setDate(est.getDate() - 1);
+      return `${est.getMonth() + 1}/${est.getDate()}`;
+    }
 
-      const rosterHeaders = rosters.shift();
-      const scheduleHeaders = schedule.shift();
-
-      const userIndex = rosterHeaders.findIndex(h => h.includes('User @'));
-      const idIndex = rosterHeaders.findIndex(h => h.includes('User ID'));
-      const teamIndex = rosterHeaders.findIndex(h => h.toLowerCase() === 'team');
-      const playingIndex = rosterHeaders.findIndex(h => h.toLowerCase().includes('playing'));
-
-      const dateIndex = scheduleHeaders.findIndex(h => h.toLowerCase() === 'date');
-      const team1Index = scheduleHeaders.findIndex(h => h.toLowerCase().includes('team 1'));
-      const team2Index = scheduleHeaders.findIndex(h => h.toLowerCase().includes('team 2'));
-
-      const today = new Date();
-      const todayStr = `${today.getMonth() + 1}/${today.getDate()}`;
-
-      const teamsPlayingToday = new Set(
-        schedule
-          .filter(row => row[dateIndex] === todayStr)
-          .flatMap(row => [row[team1Index], row[team2Index]])
-          .map(t => t.trim())
-      );
-
-      const activeUsers = rosters.filter(row =>
-        row[playingIndex]?.toLowerCase() === 'yes' &&
-        teamsPlayingToday.has(row[teamIndex])
-      ).map(row => ({
-        username: row[userIndex],
-        userId: row[idIndex]
-      }));
-
-      for (let i = 0; i < activeUsers.length; i++) {
-        await fetchKarmaWithRetry(activeUsers[i], 0);
-        const delay = 800 + Math.random() * 700;
-        await new Promise(res => setTimeout(res, delay));
+    async function fetchKarma(userId) {
+      if (karmaCache.has(userId)) return karmaCache.get(userId);
+      const apiUrl = `https://api.real.vg/user/${userId}/karmafeed`;
+      const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(apiUrl)}&cache_bust=${Date.now()}`;
+      try {
+        const res = await axios.get(proxyUrl);
+        const data = JSON.parse(res.data.contents);
+        const val = typeof data?.stats?.karmaDelta === 'number'
+          ? data.stats.karmaDelta
+          : Number(data.stats.karmaDelta) || 0;
+        karmaCache.set(userId, val);
+        return val;
+      } catch (e) {
+        console.warn(`❌ Error for ${userId}:`, e.message);
+        return null;
       }
     }
 
-    async function fetchKarmaWithRetry(user, tries = 0) {
-      const maxRetries = 4;
-      const delayBackoff = [0, 1000, 2000, 4000, 8000];
-      const proxies = [
-        'https://api.allorigins.win/raw?url=',
-        'https://api.allorigins.hex.pm/raw?url='
-      ];
+    async function loadStats() {
+      try {
+        const [scheduleResp, rosterResp] = await Promise.all([
+          axios.get(scheduleCsvUrl),
+          axios.get(rosterCsvUrl)
+        ]);
 
-      for (let proxy of proxies) {
-        try {
-          const res = await fetch(`${proxy}${encodeURIComponent(`https://api.real.vg/user/${user.userId}/karmafeed`)}`);
-          const data = await res.json();
-          const delta = data.stats?.karmaDelta ?? 'N/A';
+        const schedule = parseCSV(scheduleResp.data);
+        const roster = parseCSV(rosterResp.data);
 
-          successCount++;
-          updateLoader();
-          addRow(user.username, user.userId, delta, '✅', 'success');
+        const today = getTodayString();
+        const todaysTeams = schedule
+          .filter(g => g['Date'] === today)
+          .flatMap(g => [g['Team 1'], g['Team 2']])
+          .map(t => t.trim());
+
+        if (todaysTeams.length === 0) {
+          outputEl.innerHTML = 'No games scheduled today.';
           return;
-        } catch (err) {
-          // Try next proxy
         }
+
+        const eligiblePlayers = roster.filter(p =>
+          p['playing?']?.toLowerCase() === 'yes' &&
+          todaysTeams.includes(p['Team']?.trim())
+        );
+
+        outputEl.innerHTML = '';
+        let success = 0, failed = 0;
+
+        for (const player of eligiblePlayers) {
+          const username = player['User @'] || 'Unknown';
+          const userId = player['User ID']?.trim();
+
+          if (!userId || userId.toLowerCase() === 'not found') {
+            failed++;
+            outputEl.innerHTML += `<div class="user-row error">${username}: ❌ Missing ID</div>`;
+            continue;
+          }
+
+          const karma = await fetchKarma(userId);
+          if (karma === null) {
+            failed++;
+            outputEl.innerHTML += `<div class="user-row error">${username}: ❌ Error fetching karma</div>`;
+          } else {
+            success++;
+            const colorClass = karma > 0 ? 'positive' : (karma < 0 ? 'negative' : 'neutral');
+            outputEl.innerHTML += `<div class="user-row ${colorClass}">${username}: ${Math.round(karma)}</div>`;
+          }
+        }
+
+        summaryEl.innerText = `✅ Success: ${success} | ❌ Failed: ${failed}`;
+      } catch (err) {
+        outputEl.innerHTML = `<div class="error">Failed to load data: ${err.message}</div>`;
+        console.error(err);
       }
-
-      if (tries < maxRetries) {
-        const wait = delayBackoff[tries] || 10000;
-        await new Promise(res => setTimeout(res, wait));
-        return fetchKarmaWithRetry(user, tries + 1);
-      } else {
-        failCount++;
-        updateLoader();
-        addRow(user.username, user.userId, 'Error', '❌', 'fail');
-      }
     }
 
-    function updateLoader() {
-      loader.textContent = `Loading... Success: ${successCount} | Fail: ${failCount}`;
-    }
-
-    function addRow(username, userId, karmaDelta, status, statusClass) {
-      const row = document.createElement('tr');
-      row.innerHTML = `
-        <td>${username}</td>
-        <td>${userId}</td>
-        <td>${karmaDelta}</td>
-        <td class="${statusClass}">${status}</td>
-      `;
-      tableBody.appendChild(row);
-    }
-
-    fetchData();
+    loadStats();
   </script>
 </body>
 </html>
