@@ -25,7 +25,7 @@
   </style>
 </head>
 <body>
-  <h2>Live Karma Stat Tracker v1.0</h2>
+  <h2>Live Karma Stat Tracker v1.1</h2>
   <div id="user-list">Loading...</div>
   <div class="summary" id="summary"></div>
 
@@ -55,31 +55,36 @@
       return `${est.getMonth() + 1}/${est.getDate()}`;
     }
 
-    async function retryWithDelay(fn, retries = 3, delayMs = 500) {
-      for (let i = 0; i < retries; i++) {
-        const result = await fn();
-        if (result !== null) return result;
-        await new Promise(res => setTimeout(res, delayMs));
-      }
-      return null;
-    }
-
-    async function fetchKarma(userId) {
+    async function fetchKarma(userId, attempt = 1) {
       if (karmaCache.has(userId)) return karmaCache.get(userId);
-      const apiUrl = `https://api.real.vg/user/${userId}/karmafeed`;
-      const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(apiUrl)}&cache_bust=${Date.now()}`;
-      try {
-        const res = await axios.get(proxyUrl);
-        const data = JSON.parse(res.data.contents);
-        const val = typeof data?.stats?.karmaDelta === 'number'
-          ? data.stats.karmaDelta
-          : Number(data.stats.karmaDelta) || 0;
-        karmaCache.set(userId, val);
-        return val;
-      } catch (e) {
-        console.warn(`❌ Error for ${userId}:`, e.message);
-        return null;
+
+      const realApi = `https://api.real.vg/user/${userId}/karmafeed`;
+      const proxies = [
+        url => `https://api.allorigins.win/get?url=${encodeURIComponent(url)}&cache_bust=${Date.now()}`,
+        url => `https://thingproxy.freeboard.io/fetch/${encodeURIComponent(url)}`
+      ];
+
+      for (let proxy of proxies) {
+        try {
+          const res = await axios.get(proxy(realApi), { timeout: 4000 });
+          const data = proxy === proxies[0] ? JSON.parse(res.data.contents) : res.data;
+          const val = typeof data?.stats?.karmaDelta === 'number'
+            ? data.stats.karmaDelta
+            : Number(data?.stats?.karmaDelta) || 0;
+          karmaCache.set(userId, val);
+          return val;
+        } catch (err) {
+          console.warn(`Proxy fail [Attempt ${attempt}]:`, err.message);
+        }
       }
+
+      // Retry up to 3 times total
+      if (attempt < 3) {
+        await new Promise(res => setTimeout(res, 400));
+        return fetchKarma(userId, attempt + 1);
+      }
+
+      return null;
     }
 
     async function loadStats() {
@@ -129,7 +134,7 @@
               return;
             }
 
-            const karma = await retryWithDelay(() => fetchKarma(userId), 3, 500);
+            const karma = await fetchKarma(userId);
 
             if (karma === null) {
               failed++;
@@ -140,7 +145,7 @@
               outputEl.innerHTML += `<div class="user-row ${colorClass}">${username}: ${Math.round(karma)}</div>`;
             }
           }));
-          await new Promise(res => setTimeout(res, 300)); // brief pause between batches
+          await new Promise(res => setTimeout(res, 600));
         }
 
         summaryEl.innerText = `✅ Success: ${success} | ❌ Failed: ${failed}`;
