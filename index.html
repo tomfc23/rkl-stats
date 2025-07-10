@@ -1,161 +1,175 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>RKL Stat Tracker</title>
-  <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
-  <style>
-    body {
-      font-family: sans-serif;
-      background: #111;
-      color: #fff;
-      padding: 20px;
-    }
-    h2 { margin-bottom: 10px; }
-    .user-row {
-      padding: 6px 12px;
-      border-bottom: 1px solid #333;
-    }
-    .positive { color: #2ecc71; }
-    .negative { color: #e74c3c; }
-    .neutral { color: #aaa; }
-    .summary { margin-top: 20px; font-weight: bold; }
-    .error { color: #e74c3c; }
-  </style>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>RKL Stat Tracker - Slow Mode</title>
+<script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+<style>
+  body {
+    font-family: sans-serif;
+    background: #111;
+    color: #fff;
+    padding: 20px;
+  }
+  h2 { margin-bottom: 10px; }
+  .user-row {
+    padding: 6px 12px;
+    border-bottom: 1px solid #333;
+  }
+  .positive { color: #2ecc71; }
+  .negative { color: #e74c3c; }
+  .neutral { color: #aaa; }
+  .summary { margin-top: 20px; font-weight: bold; }
+  .error { color: #e74c3c; }
+</style>
 </head>
 <body>
-  <h2>Live Karma Stat Tracker v1.1</h2>
-  <div id="user-list">Loading...</div>
-  <div class="summary" id="summary"></div>
+<h2>Live Karma Stat Tracker (Slow Mode)</h2>
+<div id="user-list">Loading...</div>
+<div class="summary" id="summary"></div>
 
-  <script>
-    const scheduleCsvUrl = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRgy7uZ8caLI4hTPKSjl9e7ztFaM9vdBk4vXDQbPtcybqzXGOm3FMpSJiyrRTzIM3K70z_6XbgBGP_0/pub?output=csv';
-    const rosterCsvUrl = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRe5WoA--wsfCCCvtL8QgQKsJv0z1AIUTY7k5NEYgUF-Ipu3Iotxkcbw7D-Cme6YGUksHy3DmyDYpaO/pub?output=csv';
+<script>
+const scheduleCsvUrl = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRgy7uZ8caLI4hTPKSjl9e7ztFaM9vdBk4vXDQbPtcybqzXGOm3FMpSJiyrRTzIM3K70z_6XbgBGP_0/pub?output=csv';
+const rosterCsvUrl = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRe5WoA--wsfCCCvtL8QgQKsJv0z1AIUTY7k5NEYgUF-Ipu3Iotxkcbw7D-Cme6YGUksHy3DmyDYpaO/pub?output=csv';
 
-    const outputEl = document.getElementById('user-list');
-    const summaryEl = document.getElementById('summary');
-    const karmaCache = new Map();
+const outputEl = document.getElementById('user-list');
+const summaryEl = document.getElementById('summary');
 
-    function parseCSV(text) {
-      const lines = text.trim().split('\n');
-      const headers = lines[0].split(',').map(h => h.trim());
-      return lines.slice(1).map(line => {
-        const parts = line.split(',').map(p => p.trim());
-        const obj = {};
-        headers.forEach((h, i) => { obj[h] = parts[i]; });
-        return obj;
-      });
+function parseCSV(text) {
+  const lines = text.trim().split('\n');
+  const headers = lines[0].split(',').map(h => h.trim());
+  return lines.slice(1).map(line => {
+    const parts = line.split(',').map(p => p.trim());
+    const obj = {};
+    headers.forEach((h, i) => { obj[h] = parts[i]; });
+    return obj;
+  });
+}
+
+function getTodayString() {
+  const now = new Date();
+  const est = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }));
+  if (est.getHours() < 7) est.setDate(est.getDate() - 1);
+  return `${est.getMonth() + 1}/${est.getDate()}`;
+}
+
+async function fetchWithRetry(url, retries = 3) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      return await axios.get(url, { timeout: 5000 });
+    } catch (e) {
+      if (i === retries - 1) throw e;
+      await new Promise(r => setTimeout(r, 800 + Math.random() * 400));
+    }
+  }
+}
+
+async function fetchKarma(userId) {
+  const realApi = `https://api.real.vg/user/${userId}/karmafeed`;
+  const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(realApi)}&cache_bust=${Date.now()}`;
+  try {
+    const res = await fetchWithRetry(proxyUrl);
+    const data = JSON.parse(res.data.contents);
+    const val = typeof data?.stats?.karmaDelta === 'number' ? data.stats.karmaDelta : Number(data?.stats?.karmaDelta) || 0;
+    return val;
+  } catch {
+    return null;
+  }
+}
+
+function sleep(ms) {
+  return new Promise(res => setTimeout(res, ms));
+}
+
+async function loadStats() {
+  try {
+    const [scheduleResp, rosterResp] = await Promise.all([
+      axios.get(scheduleCsvUrl),
+      axios.get(rosterCsvUrl)
+    ]);
+
+    const schedule = parseCSV(scheduleResp.data);
+    const roster = parseCSV(rosterResp.data);
+
+    const today = getTodayString();
+    const todaysTeams = schedule
+      .filter(g => g['Date'] === today)
+      .flatMap(g => [g['Team 1'], g['Team 2']])
+      .map(t => t.trim());
+
+    if (todaysTeams.length === 0) {
+      outputEl.innerHTML = 'No games scheduled today.';
+      return;
     }
 
-    function getTodayString() {
-      const now = new Date();
-      const est = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }));
-      if (est.getHours() < 7) est.setDate(est.getDate() - 1);
-      return `${est.getMonth() + 1}/${est.getDate()}`;
-    }
+    const eligiblePlayers = roster.filter(p =>
+      p['playing?']?.toLowerCase() === 'yes' &&
+      todaysTeams.includes(p['Team']?.trim())
+    );
 
-    async function fetchKarma(userId, attempt = 1) {
-      if (karmaCache.has(userId)) return karmaCache.get(userId);
+    outputEl.innerHTML = '';
+    let success = 0, failed = 0;
 
-      const realApi = `https://api.real.vg/user/${userId}/karmafeed`;
-      const proxies = [
-        url => `https://api.allorigins.win/get?url=${encodeURIComponent(url)}&cache_bust=${Date.now()}`,
-        url => `https://thingproxy.freeboard.io/fetch/${encodeURIComponent(url)}`
-      ];
+    // Concurrency: 2 parallel runners
+    const concurrency = 2;
+    const queue = [...eligiblePlayers];
+    let running = 0;
 
-      for (let proxy of proxies) {
-        try {
-          const res = await axios.get(proxy(realApi), { timeout: 4000 });
-          const data = proxy === proxies[0] ? JSON.parse(res.data.contents) : res.data;
-          const val = typeof data?.stats?.karmaDelta === 'number'
-            ? data.stats.karmaDelta
-            : Number(data?.stats?.karmaDelta) || 0;
-          karmaCache.set(userId, val);
-          return val;
-        } catch (err) {
-          console.warn(`Proxy fail [Attempt ${attempt}]:`, err.message);
-        }
-      }
+    function runNext() {
+      if (queue.length === 0) return Promise.resolve();
 
-      // Retry up to 3 times total
-      if (attempt < 3) {
-        await new Promise(res => setTimeout(res, 400));
-        return fetchKarma(userId, attempt + 1);
-      }
+      if (running >= concurrency) return Promise.resolve();
 
-      return null;
-    }
+      running++;
+      const player = queue.shift();
 
-    async function loadStats() {
-      try {
-        const [scheduleResp, rosterResp] = await Promise.all([
-          axios.get(scheduleCsvUrl),
-          axios.get(rosterCsvUrl)
-        ]);
+      return (async () => {
+        const username = player['User @'] || 'Unknown';
+        const userId = player['User ID']?.trim();
 
-        const schedule = parseCSV(scheduleResp.data);
-        const roster = parseCSV(rosterResp.data);
-
-        const today = getTodayString();
-        const todaysTeams = schedule
-          .filter(g => g['Date'] === today)
-          .flatMap(g => [g['Team 1'], g['Team 2']])
-          .map(t => t.trim());
-
-        if (todaysTeams.length === 0) {
-          outputEl.innerHTML = 'No games scheduled today.';
-          return;
+        if (!userId || userId.toLowerCase() === 'not found') {
+          failed++;
+          outputEl.innerHTML += `<div class="user-row error">${username}: ❌ Missing ID</div>`;
+          running--;
+          return runNext();
         }
 
-        const eligiblePlayers = roster.filter(p =>
-          p['playing?']?.toLowerCase() === 'yes' &&
-          todaysTeams.includes(p['Team']?.trim())
-        );
-
-        outputEl.innerHTML = '';
-        let success = 0, failed = 0;
-
-        const concurrency = 5;
-        const chunks = [];
-
-        for (let i = 0; i < eligiblePlayers.length; i += concurrency) {
-          chunks.push(eligiblePlayers.slice(i, i + concurrency));
-        }
-
-        for (const chunk of chunks) {
-          await Promise.all(chunk.map(async (player) => {
-            const username = player['User @'] || 'Unknown';
-            const userId = player['User ID']?.trim();
-
-            if (!userId || userId.toLowerCase() === 'not found') {
-              failed++;
-              outputEl.innerHTML += `<div class="user-row error">${username}: ❌ Missing ID</div>`;
-              return;
-            }
-
-            const karma = await fetchKarma(userId);
-
-            if (karma === null) {
-              failed++;
-              outputEl.innerHTML += `<div class="user-row error">${username}: ❌ Error fetching karma</div>`;
-            } else {
-              success++;
-              const colorClass = karma > 0 ? 'positive' : (karma < 0 ? 'negative' : 'neutral');
-              outputEl.innerHTML += `<div class="user-row ${colorClass}">${username}: ${Math.round(karma)}</div>`;
-            }
-          }));
-          await new Promise(res => setTimeout(res, 600));
+        const karma = await fetchKarma(userId);
+        if (karma === null) {
+          failed++;
+          outputEl.innerHTML += `<div class="user-row error">${username}: ❌ Error fetching karma</div>`;
+        } else {
+          success++;
+          const colorClass = karma > 0 ? 'positive' : (karma < 0 ? 'negative' : 'neutral');
+          outputEl.innerHTML += `<div class="user-row ${colorClass}">${username}: ${Math.round(karma)}</div>`;
         }
 
         summaryEl.innerText = `✅ Success: ${success} | ❌ Failed: ${failed}`;
-      } catch (err) {
-        outputEl.innerHTML = `<div class="error">Failed to load data: ${err.message}</div>`;
-        console.error(err);
-      }
+
+        // Random delay 500-1500ms to avoid rate limits
+        await sleep(500 + Math.random() * 1000);
+        running--;
+        return runNext();
+      })();
     }
 
-    loadStats();
-  </script>
+    // Kick off concurrency runners
+    const runners = [];
+    for (let i = 0; i < concurrency; i++) {
+      runners.push(runNext());
+    }
+
+    await Promise.all(runners);
+
+    summaryEl.innerText = `✅ Success: ${success} | ❌ Failed: ${failed}`;
+  } catch (err) {
+    outputEl.innerHTML = `<div class="error">Failed to load data: ${err.message}</div>`;
+    console.error(err);
+  }
+}
+
+loadStats();
+</script>
 </body>
 </html>
