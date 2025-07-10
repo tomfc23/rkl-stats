@@ -25,14 +25,14 @@
   </style>
 </head>
 <body>
-  <h2>Live Karma Stat Tracker</h2>
+  <h2>Live Karma Stat Tracker v1.0</h2>
   <div id="user-list">Loading...</div>
   <div class="summary" id="summary"></div>
 
   <script>
     const scheduleCsvUrl = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRgy7uZ8caLI4hTPKSjl9e7ztFaM9vdBk4vXDQbPtcybqzXGOm3FMpSJiyrRTzIM3K70z_6XbgBGP_0/pub?output=csv';
     const rosterCsvUrl = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRe5WoA--wsfCCCvtL8QgQKsJv0z1AIUTY7k5NEYgUF-Ipu3Iotxkcbw7D-Cme6YGUksHy3DmyDYpaO/pub?output=csv';
-    
+
     const outputEl = document.getElementById('user-list');
     const summaryEl = document.getElementById('summary');
     const karmaCache = new Map();
@@ -53,6 +53,15 @@
       const est = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }));
       if (est.getHours() < 7) est.setDate(est.getDate() - 1);
       return `${est.getMonth() + 1}/${est.getDate()}`;
+    }
+
+    async function retryWithDelay(fn, retries = 3, delayMs = 500) {
+      for (let i = 0; i < retries; i++) {
+        const result = await fn();
+        if (result !== null) return result;
+        await new Promise(res => setTimeout(res, delayMs));
+      }
+      return null;
     }
 
     async function fetchKarma(userId) {
@@ -102,25 +111,36 @@
         outputEl.innerHTML = '';
         let success = 0, failed = 0;
 
-        for (const player of eligiblePlayers) {
-          const username = player['User @'] || 'Unknown';
-          const userId = player['User ID']?.trim();
+        const concurrency = 5;
+        const chunks = [];
 
-          if (!userId || userId.toLowerCase() === 'not found') {
-            failed++;
-            outputEl.innerHTML += `<div class="user-row error">${username}: ❌ Missing ID</div>`;
-            continue;
-          }
+        for (let i = 0; i < eligiblePlayers.length; i += concurrency) {
+          chunks.push(eligiblePlayers.slice(i, i + concurrency));
+        }
 
-          const karma = await fetchKarma(userId);
-          if (karma === null) {
-            failed++;
-            outputEl.innerHTML += `<div class="user-row error">${username}: ❌ Error fetching karma</div>`;
-          } else {
-            success++;
-            const colorClass = karma > 0 ? 'positive' : (karma < 0 ? 'negative' : 'neutral');
-            outputEl.innerHTML += `<div class="user-row ${colorClass}">${username}: ${Math.round(karma)}</div>`;
-          }
+        for (const chunk of chunks) {
+          await Promise.all(chunk.map(async (player) => {
+            const username = player['User @'] || 'Unknown';
+            const userId = player['User ID']?.trim();
+
+            if (!userId || userId.toLowerCase() === 'not found') {
+              failed++;
+              outputEl.innerHTML += `<div class="user-row error">${username}: ❌ Missing ID</div>`;
+              return;
+            }
+
+            const karma = await retryWithDelay(() => fetchKarma(userId), 3, 500);
+
+            if (karma === null) {
+              failed++;
+              outputEl.innerHTML += `<div class="user-row error">${username}: ❌ Error fetching karma</div>`;
+            } else {
+              success++;
+              const colorClass = karma > 0 ? 'positive' : (karma < 0 ? 'negative' : 'neutral');
+              outputEl.innerHTML += `<div class="user-row ${colorClass}">${username}: ${Math.round(karma)}</div>`;
+            }
+          }));
+          await new Promise(res => setTimeout(res, 300)); // brief pause between batches
         }
 
         summaryEl.innerText = `✅ Success: ${success} | ❌ Failed: ${failed}`;
